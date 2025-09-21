@@ -121,6 +121,9 @@ const exportWorkflow = async (record: ResourceInfo) => {
 };
 
 const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
+  // 保存actionProps引用避免作用域问题
+  const importProps = actionProps;
+  
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = '.json';
@@ -144,7 +147,7 @@ const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
         }
         
         // 检查必要参数
-        if (!actionProps.spaceId) {
+        if (!importProps.spaceId) {
           console.error('缺少空间ID，无法导入工作流');
           alert('缺少空间ID，无法导入工作流');
           return;
@@ -160,7 +163,7 @@ const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
           name: content.name + '_imported_' + Date.now(),
           desc: content.desc || '导入的工作流',
           icon_uri: content.iconUri || '',
-          space_id: actionProps.spaceId,
+          space_id: importProps.spaceId,
           flow_mode: content.flowMode || 0, // 默认为普通工作流
           schema_type: content.schemaType || 1, // 默认FDL格式
         });
@@ -175,7 +178,7 @@ const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
             const saveRes = await workflowApi.SaveWorkflow({
               workflow_id: createRes.data.workflow_id,
               schema: typeof content.schema === 'string' ? content.schema : JSON.stringify(content.schema),
-              space_id: actionProps.spaceId,
+              space_id: importProps.spaceId,
               name: content.name + '_imported_' + Date.now(),
               desc: content.desc || '导入的工作流',
               icon_uri: content.iconUri || '',
@@ -189,8 +192,8 @@ const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
           alert('工作流导入成功！');
           
           // 刷新页面
-          if (actionProps.refreshPage) {
-            actionProps.refreshPage();
+          if (importProps.refreshPage) {
+            importProps.refreshPage();
           }
         } else {
           console.error('工作流创建失败:', createRes);
