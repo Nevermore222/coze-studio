@@ -3457,6 +3457,10 @@ func (w *ApplicationService) publishWorkflowResource(ctx context.Context, policy
 }
 
 func mustParseInt64(s string) int64 {
+	// 处理空字符串的情况
+	if s == "" {
+		return 0
+	}
 	i, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		panic(err)

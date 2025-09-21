@@ -43,6 +43,172 @@ import {
   type WorkflowResourceActionReturn,
 } from './type';
 
+// 导出导入功能函数
+const exportWorkflow = async (record: ResourceInfo) => {
+  try {
+    // 验证必要参数
+    if (!record.res_id || !record.space_id) {
+      console.error('缺少必要的工作流ID或空间ID', { 
+        res_id: record.res_id, 
+        space_id: record.space_id 
+      });
+      return;
+    }
+    
+    // 导入工作流API
+    const { workflowApi } = await import('@coze-workflow/base');
+    
+    // 获取完整的工作流信息，包括schema
+    const canvasRes = await workflowApi.GetCanvasInfo({
+      space_id: record.space_id,
+      workflow_id: record.res_id,
+    });
+    
+    const workflowInfo = canvasRes?.data?.workflow;
+    if (!workflowInfo) {
+      console.error('无法获取工作流详细信息');
+      return;
+    }
+    
+    // 构建完整的导出数据
+    const workflowData = {
+      type: 'WORKFLOW_EXPORT',
+      version: '1.0',
+      workflowId: workflowInfo.workflow_id,
+      name: workflowInfo.name,
+      desc: workflowInfo.desc,
+      iconUri: workflowInfo.icon_uri,
+      createTime: workflowInfo.create_time,
+      updateTime: workflowInfo.update_time,
+      creator: workflowInfo.creator,
+      flowMode: workflowInfo.flow_mode,
+      schemaType: workflowInfo.schema_type,
+      // 完整的工作流schema，这是最重要的部分
+      schema: workflowInfo.schema_json ? JSON.parse(workflowInfo.schema_json) : null,
+      // 原始schema字符串，便于调试
+      schemaRaw: workflowInfo.schema_json,
+      // 其他元数据
+      metadata: {
+        spaceId: record.space_id,
+        resType: record.res_type,
+        collaborationEnable: record.collaboration_enable,
+        exportTime: new Date().toISOString(),
+      },
+    };
+    
+    // 创建下载文件
+    const blob = new Blob([JSON.stringify(workflowData, null, 2)], {
+      type: 'application/json',
+    });
+    
+    // 创建下载链接
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `workflow-${workflowInfo.name}-${workflowInfo.workflow_id}.json`;
+    document.body.appendChild(link);
+    link.click();
+    
+    // 清理
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    console.log('工作流导出成功:', workflowData);
+  } catch (error) {
+    console.error('导出工作流失败:', error);
+    // 可以在这里添加用户提示
+  }
+};
+
+const importWorkflow = async (actionProps: WorkflowResourceActionProps) => {
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.json';
+  fileInput.style.display = 'none';
+  
+  fileInput.addEventListener('change', async (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = JSON.parse(e.target?.result as string);
+        console.log('导入的工作流数据:', content);
+        
+        // 检查文件格式
+        if (content.type !== 'WORKFLOW_EXPORT' || !content.schema) {
+          console.error('无效的工作流文件格式');
+          alert('无效的工作流文件格式，请选择正确的导出文件');
+          return;
+        }
+        
+        // 检查必要参数
+        if (!actionProps.spaceId) {
+          console.error('缺少空间ID，无法导入工作流');
+          alert('缺少空间ID，无法导入工作流');
+          return;
+        }
+        
+        // 导入工作流API
+        const { workflowApi } = await import('@coze-workflow/base');
+        
+        console.log('开始创建工作流...');
+        
+        // 创建新的工作流
+        const createRes = await workflowApi.CreateWorkflow({
+          name: content.name + '_imported_' + Date.now(),
+          desc: content.desc || '导入的工作流',
+          icon_uri: content.iconUri || '',
+          space_id: actionProps.spaceId,
+          flow_mode: content.flowMode || 0, // 默认为普通工作流
+          schema_type: content.schemaType || 1, // 默认FDL格式
+        });
+        
+        console.log('工作流创建响应:', createRes);
+        
+        if (createRes?.data?.workflow_id) {
+          console.log('工作流创建成功，开始保存schema...');
+          
+          // 如果有schema，则保存schema
+          if (content.schema) {
+            const saveRes = await workflowApi.SaveWorkflow({
+              workflow_id: createRes.data.workflow_id,
+              schema: typeof content.schema === 'string' ? content.schema : JSON.stringify(content.schema),
+              space_id: actionProps.spaceId,
+              name: content.name + '_imported_' + Date.now(),
+              desc: content.desc || '导入的工作流',
+              icon_uri: content.iconUri || '',
+              submit_commit_id: '',
+            });
+            
+            console.log('schema保存响应:', saveRes);
+          }
+          
+          console.log('工作流导入成功:', createRes.data.workflow_id);
+          alert('工作流导入成功！');
+          
+          // 刷新页面
+          if (actionProps.refreshPage) {
+            actionProps.refreshPage();
+          }
+        } else {
+          console.error('工作流创建失败:', createRes);
+          alert('工作流创建失败，请检查控制台了解详细信息');
+        }
+      } catch (error) {
+        console.error('解析或导入工作流失败:', error);
+        alert('导入工作流失败: ' + (error.message || '未知错误'));
+      }
+    };
+    reader.readAsText(file);
+  });
+  
+  document.body.appendChild(fileInput);
+  fileInput.click();
+  document.body.removeChild(fileInput);
+};
+
 const { ActionKey } = resource_resource_common;
 
 type ActionItemProps = NonNullable<TableActionProps['actionList']>[number];
@@ -105,6 +271,22 @@ export const useWorkflowResourceMenuActions = (
         actionKey: 'edit',
         actionText: I18n.t('Edit'),
         handler: () => actionMap?.[ActionKey.Edit]?.(record),
+      },
+      {
+        actionKey: 'export',
+        actionText: I18n.t('Export'),
+        handler: () => {
+          // 导出工作流为JSON文件
+          exportWorkflow(record);
+        },
+      },
+      {
+        actionKey: 'import',
+        actionText: I18n.t('Import'),
+        handler: () => {
+          // 导入工作流
+          importWorkflow(props);
+        },
       },
       {
         hide: !chatflowConfig,
