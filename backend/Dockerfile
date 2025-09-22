@@ -1,10 +1,18 @@
 # Stage 1: Builder for Go application
+# 使用阿里云基础镜像加速国内拉取
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
 # Install build dependencies for Go
-RUN apk add --no-cache git gcc libc-dev
+# 切换为国内 APK 源以提升依赖安装稳定性
+RUN sed -i 's|https://dl-cdn.alpinelinux.org|https://mirrors.aliyun.com|g' /etc/apk/repositories \
+    && apk add --no-cache git gcc libc-dev
+
+# Set Go proxy for better connectivity in China
+# 使用国内 Go 模块代理与校验源
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=sum.golang.google.cn
 
 # Copy go.mod and go.sum first to leverage Docker cache
 COPY backend/go.mod backend/go.sum ./
@@ -25,9 +33,11 @@ WORKDIR /app
 # Install runtime dependencies for Go app and base for Python
 # pax-utils for scanelf, python3 for running Python, python3-dev for headers/shared libs
 # bind-tools for nslookup etc., file for debugging file types
-RUN apk add --no-cache pax-utils python3 python3-dev bind-tools file deno curl
+# 切换运行时镜像 APK 源，并安装依赖
+RUN sed -i 's|https://dl-cdn.alpinelinux.org|https://mirrors.aliyun.com|g' /etc/apk/repositories \
+    && apk add --no-cache pax-utils python3 python3-dev bind-tools file deno curl
 
-RUN deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print('Hello, World')"
+# RUN deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print('Hello, World')"
 
 # Install Python build dependencies, create venv, install packages, then remove build deps
 RUN apk add --no-cache --virtual .python-build-deps build-base py3-pip git && \
@@ -55,7 +65,7 @@ COPY backend/infra/impl/coderunner/script/sandbox.py /app/sandbox.py
 # Copy static resources
 # COPY backend/static /app/resources/static/
 COPY backend/conf /app/resources/conf/
-COPY docker/.env.example /app/.env
+# .env 将通过 docker-compose 运行时挂载，无需在镜像内复制
 # COPY docker/.env.ve /app/.env
 # COPY docker/cert.pem /app/cert.pem
 # COPY docker/key.pem /app/key.pem

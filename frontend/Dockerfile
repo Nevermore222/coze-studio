@@ -10,7 +10,9 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 RUN apk add --no-cache bash git dos2unix
 
 # if you located in China, you can use aliyun mirror to speed up
-RUN npm config set registry https://registry.npmmirror.com
+#RUN npm config set registry https://npm.aliyun.com 
+RUN npm config set registry https://registry.npmmirror.com 
+
 
 # Copy rush.json from root directory first
 COPY rush.json ./

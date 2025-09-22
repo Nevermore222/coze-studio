@@ -138,10 +138,10 @@ services:
           'CMD-SHELL',
           'curl -f http://localhost:9200 && [ -f /tmp/es_plugins_ready ] && [ -f /tmp/es_init_complete ]',
         ]
-      interval: 5s
-      timeout: 10s
-      retries: 10
-      start_period: 10s
+      interval: 10s
+      timeout: 30s
+      retries: 20
+      start_period: 60s
     networks:
       - coze-network
     # Install smartcn analyzer plugin and initialize ES
@@ -416,7 +416,7 @@ services:
 
   coze-web:
     build:
-      context: ..
+      context: ../
       dockerfile: frontend/Dockerfile
     # image: cozedev/coze-studio-web:latest
     container_name: coze-web
