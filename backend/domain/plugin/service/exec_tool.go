@@ -1047,7 +1047,7 @@ func (t *toolExecutor) processResponse(ctx context.Context, rawResp string) (tri
 
 	schemaVal := mType.Schema.Value
 	if len(schemaVal.Properties) == 0 {
-		return "", nil
+		return rawResp, nil
 	}
 
 	var trimmedRespMap map[string]any
@@ -1119,6 +1119,11 @@ func (t *toolExecutor) processWithInvalidRespProcessStrategyOfReturnErr(_ contex
 					"expected '%s' to be of type 'object', but got '%T'", paramName, paramVal))
 			}
 
+            // If the object schema has no properties defined, return the original object as-is
+            if len(schemaVal.Properties) == 0 {
+                return paramValMap, nil
+            }
+
 			newParamValMap := map[string]any{}
 			for paramName_, paramVal_ := range paramValMap {
 				paramSchema_, ok := schemaVal.Properties[paramName_]
@@ -1140,6 +1145,11 @@ func (t *toolExecutor) processWithInvalidRespProcessStrategyOfReturnErr(_ contex
 				return nil, errorx.New(errno.ErrPluginExecuteToolFailed, errorx.KVf(errno.PluginMsgKey,
 					"expected '%s' to be of type 'array', but got '%T'", paramName, paramVal))
 			}
+
+            // If the array item schema is not defined or has no properties, return the original slice
+            if schemaVal.Items == nil || schemaVal.Items.Value == nil || (schemaVal.Items.Value.Type == openapi3.TypeObject && len(schemaVal.Items.Value.Properties) == 0) {
+                return paramValSlice, nil
+            }
 
 			newParamValSlice := []any{}
 			for _, paramVal_ := range paramValSlice {
@@ -1222,12 +1232,17 @@ func (t *toolExecutor) processWithInvalidRespProcessStrategyOfReturnDefault(_ co
 	processor = func(paramVal any, schemaVal *openapi3.Schema) (any, error) {
 		switch schemaVal.Type {
 		case openapi3.TypeObject:
-			newParamValMap := map[string]any{}
 			paramValMap, ok := paramVal.(map[string]any)
 			if !ok {
 				return nil, nil
 			}
 
+			// 当对象schema没有定义properties时，返回原始值
+			if len(schemaVal.Properties) == 0 {
+				return paramValMap, nil
+			}
+
+			newParamValMap := map[string]any{}
 			for paramName, _paramVal := range paramValMap {
 				_paramSchema, ok := schemaVal.Properties[paramName]
 				if !ok || t.disabledParam(_paramSchema.Value) { // Only the object field can be disabled, and the top level of request and response must be the object structure
@@ -1250,12 +1265,17 @@ func (t *toolExecutor) processWithInvalidRespProcessStrategyOfReturnDefault(_ co
 			}
 
 			for _, _paramVal := range paramValSlice {
-				newParamVal, err := processor(_paramVal, schemaVal.Items.Value)
-				if err != nil {
-					return nil, err
-				}
-				if newParamVal != nil {
-					newParamValSlice = append(newParamValSlice, newParamVal)
+				if schemaVal.Items == nil || schemaVal.Items.Value == nil || len(schemaVal.Items.Value.Properties) == 0 {
+					// 当数组元素schema未定义时，返回原始值
+					newParamValSlice = append(newParamValSlice, _paramVal)
+				} else {
+					newParamVal, err := processor(_paramVal, schemaVal.Items.Value)
+					if err != nil {
+						return nil, err
+					}
+					if newParamVal != nil {
+						newParamValSlice = append(newParamValSlice, newParamVal)
+					}
 				}
 			}
 
