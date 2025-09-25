@@ -1,0 +1,90 @@
+openapi: 3.0.3
+info:
+  title: Dify Bridge
+  version: "1.0.0"
+servers:
+  - url: http://192.168.9.177
+paths:
+  /v1/chat-messages:
+    post:
+      operationId: dify_chat_messages
+      summary: Invoke Dify Chat App
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  additionalProperties: true
+                  default: {}
+                query:
+                  type: string
+                user:
+                  type: string
+                conversation_id:
+                  type: string
+                response_mode:
+                  type: string
+                  enum: [blocking]
+                  default: blocking
+                stream:
+                  type: boolean
+                  default: false
+              required: [query, inputs]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  answer:
+                    type: string
+                  metadata:
+                    type: object
+                    additionalProperties: true
+  /v1/workflows/{workflow_id}/run:
+    post:
+      operationId: dify_workflow_run
+      summary: Run Dify Workflow
+      parameters:
+        - in: path
+          name: workflow_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  additionalProperties: true
+                user:
+                  type: string
+                response_mode:
+                  type: string
+                  enum: [blocking]
+                  default: blocking
+                stream:
+                  type: boolean
+                  default: false
+              required: [inputs]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+

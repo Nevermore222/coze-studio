@@ -907,3 +907,39 @@
       deprecated: false
       method: get
       sub_url: /v5/place/around
+- plugin_id: 9991
+  product_id: 7999999999999999999
+  deprecated: false
+  version: v1.0.0
+  openapi_doc_file: dify_openapi.yaml
+  plugin_type: 1
+  manifest:
+    schema_version: v1
+    name_for_model: dify_bridge
+    name_for_human: Dify 桥接
+    description_for_model: 通过 Dify 的 API 调用 Chat 应用与 Workflow
+    description_for_human: 通过 Dify 的 API 调用 Chat 应用与 Workflow
+    auth:
+      type: service_http
+      key: Authorization
+      sub_type: token/api_key
+      payload: '{"key":"Authorization","service_token":"Bearer ${DIFY_API_KEY}","location":"Header"}'
+    logo_url: official_plugin_icon/plugin_default.png
+    api:
+      type: openapi
+    common_params:
+      header:
+        - name: User-Agent
+          value: Coze/1.0
+      query: [ ]
+      path: [ ]
+      body: [ ]
+  tools:
+    - tool_id: 99910001
+      deprecated: false
+      method: post
+      sub_url: /v1/chat-messages
+    - tool_id: 99910002
+      deprecated: false
+      method: post
+      sub_url: /v1/workflows/{workflow_id}/run

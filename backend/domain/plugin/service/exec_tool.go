@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"github.com/coze-dev/coze-studio/backend/pkg/lang/conv"
 	"github.com/coze-dev/coze-studio/backend/types/consts"
 	"io"
@@ -944,19 +945,26 @@ func (t *toolExecutor) injectServiceAPIToken(ctx context.Context, httpReq *http.
 			return "", fmt.Errorf("auth of api token is nil")
 		}
 
+        // Expand environment variables in service token, e.g. "Bearer ${DIFY_API_KEY}"
+        // so that tokens can be injected securely via .env
+        effectiveToken := os.ExpandEnv(authOfAPIToken.ServiceToken)
+        if effectiveToken == "" {
+            effectiveToken = authOfAPIToken.ServiceToken
+        }
+
 		loc := strings.ToLower(string(authOfAPIToken.Location))
 		if loc == openapi3.ParameterInQuery {
 			query := httpReq.URL.Query()
 			if query.Get(authOfAPIToken.Key) == "" {
-				query.Set(authOfAPIToken.Key, authOfAPIToken.ServiceToken)
+                query.Set(authOfAPIToken.Key, effectiveToken)
 				httpReq.URL.RawQuery = query.Encode()
 			}
 		}
 
 		if loc == openapi3.ParameterInHeader {
-			if httpReq.Header.Get(authOfAPIToken.Key) == "" {
-				httpReq.Header.Set(authOfAPIToken.Key, authOfAPIToken.ServiceToken)
-			}
+            if httpReq.Header.Get(authOfAPIToken.Key) == "" {
+                httpReq.Header.Set(authOfAPIToken.Key, effectiveToken)
+            }
 		}
 	}
 
