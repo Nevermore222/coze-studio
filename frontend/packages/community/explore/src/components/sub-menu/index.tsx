@@ -45,6 +45,14 @@ const getMenuConfig = () => [
     type: 'template',
     path: '/explore/template',
   },
+  {
+    type: 'dify',
+    icon: <IconCozPlugin />,
+    activeIcon: <IconCozPluginFill />,
+    title: 'Dify 集成',
+    isActive: true,
+    path: '/explore/dify',
+  },
 ];
 
 export const ExploreSubMenu = () => {

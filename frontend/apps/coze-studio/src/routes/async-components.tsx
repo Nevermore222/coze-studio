@@ -143,3 +143,6 @@ export const ExplorePluginPage = lazy(() =>
     default: exps.PluginPage,
   })),
 );
+
+// Dify management page
+export const DifyManagementPage = lazy(() => import('../pages/dify-management'));

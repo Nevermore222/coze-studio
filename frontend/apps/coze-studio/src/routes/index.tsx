@@ -44,6 +44,7 @@ import {
   DatabaseDetail,
   ExplorePluginPage,
   ExploreTemplatePage,
+  DifyManagementPage,
 } from './async-components';
 
 export const router: ReturnType<typeof createBrowserRouter> =
@@ -279,7 +280,25 @@ export const router: ReturnType<typeof createBrowserRouter> =
                 type: 'template',
               }),
             },
+            // dify integration
+            {
+              path: 'dify',
+              element: <DifyManagementPage />,
+              loader: () => ({
+                type: 'dify',
+              }),
+            },
           ],
+        },
+        
+        // Dify management
+        {
+          path: 'dify',
+          element: <DifyManagementPage />,
+          loader: () => ({
+            hasSider: true,
+            requireAuth: true,
+          }),
         },
       ],
     },

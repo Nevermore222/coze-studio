@@ -20,6 +20,7 @@ package coze
 
 import (
 	"context"
+	"os"
 	"regexp"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -911,5 +912,38 @@ func GetQueriedOAuthPluginList(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	c.JSON(consts.StatusOK, resp)
+}
+
+// GetEnvVar .
+// @router /api/plugin_api/get_env_var [GET]
+func GetEnvVar(ctx context.Context, c *app.RequestContext) {
+	name := string(c.Query("name"))
+	if name == "" {
+		invalidParamRequestResponse(c, "name is required")
+		return
+	}
+
+	// 只允许获取指定的环境变量，避免安全问题
+	allowedVars := map[string]bool{
+		"DIFY_API_KEY": true,
+	}
+
+	if !allowedVars[name] {
+		invalidParamRequestResponse(c, "environment variable not allowed")
+		return
+	}
+
+	value := os.Getenv(name)
+	
+	resp := map[string]interface{}{
+		"code": 0,
+		"msg":  "success", 
+		"data": map[string]interface{}{
+			"name":  name,
+			"value": value,
+		},
+	}
+	
 	c.JSON(consts.StatusOK, resp)
 }
