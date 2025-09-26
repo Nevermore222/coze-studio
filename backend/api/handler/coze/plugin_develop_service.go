@@ -20,8 +20,14 @@ package coze
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -946,4 +952,274 @@ func GetEnvVar(ctx context.Context, c *app.RequestContext) {
 	}
 	
 	c.JSON(consts.StatusOK, resp)
+}
+
+// ScanDifyApps .
+// @router /api/plugin_api/scan_dify_apps [POST]
+func ScanDifyApps(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		Host   string `json:"host"`
+		ApiKey string `json:"api_key"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		invalidParamRequestResponse(c, "invalid request body")
+		return
+	}
+
+	if req.Host == "" || req.ApiKey == "" {
+		invalidParamRequestResponse(c, "host and api_key are required")
+		return
+	}
+
+	// 创建 HTTP 客户端
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// 调用 Dify API 获取应用信息
+	infoUrl := fmt.Sprintf("%s/v1/info", req.Host)
+	infoReq, err := http.NewRequest("GET", infoUrl, nil)
+	if err != nil {
+		invalidParamRequestResponse(c, "failed to create request")
+		return
+	}
+
+	infoReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", req.ApiKey))
+	infoReq.Header.Set("Content-Type", "application/json")
+
+	infoResp, err := client.Do(infoReq)
+	if err != nil {
+		invalidParamRequestResponse(c, fmt.Sprintf("failed to call Dify API: %v", err))
+		return
+	}
+	defer infoResp.Body.Close()
+
+	if infoResp.StatusCode != 200 {
+		body, _ := io.ReadAll(infoResp.Body)
+		invalidParamRequestResponse(c, fmt.Sprintf("Dify API error: %d %s", infoResp.StatusCode, string(body)))
+		return
+	}
+
+	var infoData map[string]interface{}
+	if err := json.NewDecoder(infoResp.Body).Decode(&infoData); err != nil {
+		invalidParamRequestResponse(c, "failed to parse Dify response")
+		return
+	}
+
+	// 构造应用信息
+	apps := []map[string]interface{}{}
+
+	// 根据 API Key 类型判断应用类型
+	appType := "chat"
+	if strings.HasPrefix(req.ApiKey, "app-") {
+		appType = "chat"
+	} else if strings.HasPrefix(req.ApiKey, "workflow-") {
+		appType = "workflow"
+	}
+
+	// 从 info API 获取应用基本信息
+	appName := "Dify 应用"
+	if name, ok := infoData["name"].(string); ok && name != "" {
+		appName = name
+	}
+
+	app := map[string]interface{}{
+		"id":          req.ApiKey,
+		"name":        appName,
+		"description": fmt.Sprintf("从 %s 导入的 %s 应用", req.Host, appType),
+		"type":        appType,
+		"api_endpoint": fmt.Sprintf("%s/v1/%s", req.Host, 
+			map[string]string{
+				"chat": "chat-messages",
+				"workflow": fmt.Sprintf("workflows/%s/run", req.ApiKey),
+			}[appType]),
+		"host":    req.Host,
+		"api_key": req.ApiKey,
+	}
+
+	apps = append(apps, app)
+
+	resp := map[string]interface{}{
+		"code": 0,
+		"msg":  "success",
+		"data": map[string]interface{}{
+			"apps": apps,
+		},
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
+// RegisterDifyPlugin .
+// @router /api/plugin_api/register_dify_plugin [POST]
+func RegisterDifyPlugin(ctx context.Context, c *app.RequestContext) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Type        string `json:"type"`
+		Host        string `json:"host"`
+		ApiKey      string `json:"api_key"`
+		SpaceID     int64  `json:"space_id"`
+		ProjectID   int64  `json:"project_id"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		invalidParamRequestResponse(c, "invalid request body")
+		return
+	}
+
+	// 生成插件清单
+	manifest := map[string]interface{}{
+		"schema_version":       "v1",
+		"name_for_model":       fmt.Sprintf("dify_%s", strings.ReplaceAll(req.Name, " ", "_")),
+		"name_for_human":       req.Name,
+		"description_for_model": req.Description,
+		"description_for_human": req.Description,
+		"auth": map[string]interface{}{
+			"type":     "service_http",
+			"key":      "Authorization",
+			"sub_type": "token/api_key",
+			"payload":  fmt.Sprintf(`{"key":"Authorization","service_token":"Bearer %s","location":"Header"}`, req.ApiKey),
+		},
+		"logo_url": "official_plugin_icon/plugin_default.png",
+		"api": map[string]interface{}{
+			"type": "openapi",
+		},
+		"common_params": map[string]interface{}{
+			"header": []map[string]string{
+				{"name": "User-Agent", "value": "Coze/1.0"},
+			},
+		},
+	}
+
+	// 生成 OpenAPI 规范
+	var apiPath, operationId string
+	if req.Type == "chat" {
+		apiPath = "/v1/chat-messages"
+		operationId = "dify_chat_messages"
+	} else {
+		apiPath = fmt.Sprintf("/v1/workflows/%s/run", req.ApiKey)
+		operationId = "dify_workflow_run"
+	}
+
+	openapi := map[string]interface{}{
+		"openapi": "3.0.3",
+		"info": map[string]interface{}{
+			"title":   req.Name,
+			"version": "1.0.0",
+		},
+		"servers": []map[string]interface{}{
+			{"url": req.Host},
+		},
+		"paths": map[string]interface{}{
+			apiPath: map[string]interface{}{
+				"post": map[string]interface{}{
+					"operationId": operationId,
+					"summary":     fmt.Sprintf("调用 Dify %s", req.Name),
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": generateRequestSchema(req.Type),
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "OK",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"additionalProperties": true,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// 转换为 JSON 字符串
+	manifestJson, _ := json.Marshal(manifest)
+	openapiJson, _ := json.Marshal(openapi)
+
+	resp := map[string]interface{}{
+		"code": 0,
+		"msg":  "success",
+		"data": map[string]interface{}{
+			"manifest": string(manifestJson),
+			"openapi":  string(openapiJson),
+		},
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
+func generateRequestSchema(appType string) map[string]interface{} {
+	if appType == "chat" {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type": "string",
+					"description": "用户问题",
+				},
+				"inputs": map[string]interface{}{
+					"type": "object",
+					"additionalProperties": true,
+					"default": map[string]interface{}{},
+					"description": "输入参数",
+				},
+				"user": map[string]interface{}{
+					"type": "string",
+					"default": "user",
+					"description": "用户标识",
+				},
+				"conversation_id": map[string]interface{}{
+					"type": "string",
+					"description": "会话ID",
+				},
+				"response_mode": map[string]interface{}{
+					"type": "string",
+					"enum": []string{"blocking"},
+					"default": "blocking",
+				},
+				"stream": map[string]interface{}{
+					"type": "boolean",
+					"default": false,
+				},
+			},
+			"required": []string{"query"},
+		}
+	} else {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"inputs": map[string]interface{}{
+					"type": "object",
+					"additionalProperties": true,
+					"description": "工作流输入参数",
+				},
+				"user": map[string]interface{}{
+					"type": "string",
+					"default": "user",
+					"description": "用户标识",
+				},
+				"response_mode": map[string]interface{}{
+					"type": "string",
+					"enum": []string{"blocking"},
+					"default": "blocking",
+				},
+				"stream": map[string]interface{}{
+					"type": "boolean",
+					"default": false,
+				},
+			},
+			"required": []string{"inputs"},
+		}
+	}
 }

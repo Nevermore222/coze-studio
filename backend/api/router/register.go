@@ -28,6 +28,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 
 	coze "github.com/coze-dev/coze-studio/backend/api/router/coze"
+	cozehandler "github.com/coze-dev/coze-studio/backend/api/handler/coze"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 )
 
@@ -35,7 +36,17 @@ import (
 func GeneratedRegister(r *server.Hertz) {
 	// INSERT_POINT: DO NOT DELETE THIS LINE!
 	coze.Register(r)
+	registerDifyRoutes(r)
 	staticFileRegister(r)
+}
+
+// registerDifyRoutes registers manual Dify integration routes
+func registerDifyRoutes(r *server.Hertz) {
+	api := r.Group("/api/plugin_api")
+	{
+		api.POST("/scan_dify_apps", cozehandler.ScanDifyApps)
+		api.POST("/register_dify_plugin", cozehandler.RegisterDifyPlugin)
+	}
 }
 
 // staticFileRegister registers web page router.
