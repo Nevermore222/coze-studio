@@ -1519,14 +1519,18 @@ func (t *toolExecutor) injectRequestBodyDefaultValue(ctx context.Context, sc *op
 				return nil, fmt.Errorf("[injectRequestBodyDefaultValue] parameter '%s' is not object", paramName)
 			}
 
-			newMapVal, err := t.injectRequestBodyDefaultValue(ctx, paramSchema, mapVal)
-			if err != nil {
-				return nil, err
-			}
+        newMapVal, err := t.injectRequestBodyDefaultValue(ctx, paramSchema, mapVal)
+        if err != nil {
+            return nil, err
+        }
 
-			if len(newMapVal) > 0 {
-				newVals[paramName] = newMapVal
-			}
+        // 始终为 object 类型写回一个对象；
+        // 当没有子属性(newMapVal为空)时，用原始 mapVal（可能为 {}），以满足必填要求
+        if len(newMapVal) > 0 {
+            newVals[paramName] = newMapVal
+        } else {
+            newVals[paramName] = mapVal
+        }
 
 			continue
 		}
