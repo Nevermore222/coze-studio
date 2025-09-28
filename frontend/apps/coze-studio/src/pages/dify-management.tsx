@@ -376,8 +376,53 @@ const DifyManagementPage = () => {
     return manifestString;
   };
 
-  // 生成 OpenAPI 文档
-  const generateOpenAPIDoc = (app: DifyApp) => {
+  // 从 Dify 错误信息中提取必填字段名
+  const extractRequiredFieldsFromError = (msg?: string): string[] => {
+    if (!msg) return [];
+    const found = new Set<string>();
+    // e.g. "command_id is required in input form"
+    const m1 = msg.match(/([A-Za-z0-9_\-]+)\s+is required/gi) || [];
+    m1.forEach(s => {
+      const k = s.split(' ')[0].replace(/[^A-Za-z0-9_\-]/g, '');
+      if (k) found.add(k);
+    });
+    // e.g. Missing required parameter: command_id
+    const m2 = msg.match(/Missing required (?:parameter|field)(?: in .*?)?:\s*([A-Za-z0-9_\-]+)/i);
+    if (m2 && m2[1]) found.add(m2[1]);
+    return Array.from(found);
+  };
+
+  // 探测 Dify 接口返回，推断必填 inputs 字段
+  const probeRequiredInputKeys = async (app: DifyApp): Promise<string[]> => {
+    const isChat = app.type === 'chat';
+    const url = isChat
+      ? `${configForm.difyHost}/v1/chat-messages`
+      : `${configForm.difyHost}/v1/workflows/${app.id}/run`;
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${configForm.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(
+          isChat
+            ? { query: 'hello', inputs: {}, user: 'user', response_mode: 'blocking', stream: false }
+            : { inputs: {}, user: 'user', response_mode: 'blocking', stream: false }
+        ),
+      });
+      if (resp.ok) return [];
+      const data = await resp.json().catch(() => ({} as any));
+      const msg = data?.message || data?.msg || '';
+      const fields = extractRequiredFieldsFromError(msg);
+      return fields;
+    } catch {
+      return [];
+    }
+  };
+
+  // 生成 OpenAPI 文档（可注入必填 inputs 字段）
+  const generateOpenAPIDoc = (app: DifyApp, requiredInputKeys: string[] = []) => {
     const isChat = app.type === 'chat';
     const apiPath = isChat ? '/v1/chat-messages' : `/v1/workflows/${app.id}/run`;
     const operationId = isChat ? 'dify_chat_messages' : 'dify_workflow_run';
@@ -387,6 +432,12 @@ const DifyManagementPage = () => {
     const cleanDescription = app.description.replace(/[^\w\s\u4e00-\u9fff]/g, '');
     
     // chat 需要 query 和 inputs；workflow 需要 inputs
+    // 动态注入探测出的必填 inputs 字段（全部 string，方便先跑通）
+    const dynamicInputProps: Record<string, any> = {};
+    requiredInputKeys.forEach(k => {
+      if (k && !dynamicInputProps[k]) dynamicInputProps[k] = { type: 'string', description: `必填：${k}` };
+    });
+
     const schemaObj = isChat
       ? { 
           type: 'object',
@@ -398,7 +449,8 @@ const DifyManagementPage = () => {
               description: '输入参数(JSON 对象)',
               additionalProperties: true, 
               default: {}, 
-              example: {}
+              example: {},
+              properties: dynamicInputProps
             },
             user: { type: 'string', default: 'user', description: '用户标识' }
           },
@@ -412,7 +464,8 @@ const DifyManagementPage = () => {
               additionalProperties: true, 
               default: {}, 
               description: '工作流输入参数(JSON 对象)',
-              example: {}
+              example: {},
+              properties: dynamicInputProps
             },
             user: { type: 'string', default: 'user', description: '用户标识' }
           },
@@ -488,9 +541,15 @@ const DifyManagementPage = () => {
           console.warn(`Dify API test failed for ${app.name}:`, err);
         }
 
-        // 生成插件清单和 OpenAPI 文档
+        // 先探测 Dify 返回，推断必填 inputs 字段
+        const requiredKeys = await probeRequiredInputKeys(app);
+        if (requiredKeys.length) {
+          console.log('🧭 探测到必填 inputs 字段: ', requiredKeys);
+        }
+
+        // 生成插件清单和 OpenAPI 文档（带必填字段）
         const aiPlugin = generatePluginManifest(app);
-        const openapi = generateOpenAPIDoc(app);
+        const openapi = generateOpenAPIDoc(app, requiredKeys);
 
         // 验证生成的 JSON 字符串格式
         try {
