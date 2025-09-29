@@ -507,8 +507,8 @@ const DifyManagementPage = () => {
     
     try {
       const requestBody = isChat
-        ? { query: 'hello', inputs: {}, user: 'user', response_mode: 'blocking' }
-        : { inputs: {}, user: 'user', response_mode: 'blocking' };
+        ? { query: 'hello', inputs: {}, user: 'user' }
+        : { inputs: {}, user: 'user' };
         
       console.log(`🔍 请求体:`, requestBody);
       
@@ -571,8 +571,7 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' },
-            response_mode: { type: 'string', default: 'blocking', description: '响应模式：blocking（阻塞）或 streaming（流式）', enum: ['blocking', 'streaming'] }
+            user: { type: 'string', default: 'user', description: '用户标识' }
           },
           required: ['query', 'inputs']
         }
@@ -587,8 +586,7 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' },
-            response_mode: { type: 'string', default: 'blocking', description: '响应模式：blocking（阻塞）或 streaming（流式）', enum: ['blocking', 'streaming'] }
+            user: { type: 'string', default: 'user', description: '用户标识' }
           },
           required: ['inputs']
         };
