@@ -324,27 +324,91 @@ const DifyManagementPage = () => {
         console.log('Direct Dify API call failed, using fallback');
       }
 
-      // 根据 API Key 判断应用类型
-      const appType = configForm.apiKey.startsWith('app-') ? 'chat' : 
-                     configForm.apiKey.startsWith('workflow-') ? 'workflow' : 'chat';
+      const normalizedHost = configForm.difyHost.replace(/\/$/, '');
+      const scannedApps: DifyApp[] = [];
 
-      // 构造应用信息
-      const scannedApps: DifyApp[] = [
-        {
-          id: configForm.apiKey,
-          name: realAppName || `Dify ${appType === 'chat' ? '聊天应用' : '工作流'}`,
-          description: `从 ${configForm.difyHost} 导入的 ${appType === 'chat' ? '聊天应用' : '工作流'}`,
-          type: appType,
-        },
-      ];
+      // 1. 先探测应用类型：通过 chat-messages 接口判断
+      let isWorkflowApp = false;
+      try {
+        const probeResp = await fetch(`${normalizedHost}/v1/chat-messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${configForm.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: 'test',
+            inputs: {},
+            user: 'probe',
+            response_mode: 'blocking'
+          })
+        });
+        
+        if (!probeResp.ok) {
+          const errorData = await probeResp.json().catch(() => ({}));
+          // 如果返回 not_chat_app，说明这是工作流应用
+          if (errorData?.code === 'not_chat_app' || 
+              String(errorData?.message || '').includes('not_chat_app') ||
+              String(errorData?.message || '').includes('workflow')) {
+            isWorkflowApp = true;
+            console.log('🔍 检测到工作流应用');
+          }
+        }
+      } catch (err) {
+        console.warn('应用类型探测失败:', err);
+      }
 
-      // 如果是聊天应用，额外添加一个示例工作流
-      if (appType === 'chat') {
+      // 2. 根据探测结果添加应用
+      if (isWorkflowApp) {
+        // 这是工作流应用，尝试获取工作流列表
+        try {
+          const wfResp = await fetch('/api/plugin_api/fetch_dify_workflows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ host: normalizedHost, api_key: configForm.apiKey })
+          });
+
+          if (wfResp.ok) {
+            const wfJson = await wfResp.json();
+            const workflows = Array.isArray(wfJson?.data?.workflows) ? wfJson.data.workflows : [];
+            if (workflows.length > 0) {
+              workflows.forEach((wf: any) => {
+                const wfId = String(wf?.id || wf?.workflow_id || wf?.uid || '').trim();
+                if (!wfId) return;
+                scannedApps.push({
+                  id: wfId,
+                  name: String(wf?.name || realAppName || '未命名工作流'),
+                  description: `从 ${normalizedHost} 导入的工作流`,
+                  type: 'workflow',
+                });
+              });
+            } else {
+              // 没有获取到工作流列表，创建一个占位项
+              scannedApps.push({
+                id: configForm.apiKey.replace('app-', 'workflow-'),
+                name: realAppName || 'Dify 工作流',
+                description: `从 ${normalizedHost} 导入的工作流（请手动配置 workflow ID）`,
+                type: 'workflow',
+              });
+            }
+          }
+        } catch (wfErr) {
+          console.warn('工作流列表获取失败:', wfErr);
+          // 创建占位项
+          scannedApps.push({
+            id: configForm.apiKey.replace('app-', 'workflow-'),
+            name: realAppName || 'Dify 工作流',
+            description: `从 ${normalizedHost} 导入的工作流`,
+            type: 'workflow',
+          });
+        }
+      } else {
+        // 这是聊天应用
         scannedApps.push({
-          id: 'workflow-example-001',
-          name: '示例工作流',
-          description: `从 ${configForm.difyHost} 导入的示例工作流`,
-          type: 'workflow',
+          id: configForm.apiKey,
+          name: realAppName || 'Dify 聊天应用',
+          description: `从 ${normalizedHost} 导入的聊天应用`,
+          type: 'chat',
         });
       }
 
@@ -370,53 +434,105 @@ const DifyManagementPage = () => {
     const cleanName = app.name.replace(/[^a-zA-Z0-9\s]/g, '').trim();
     const modelName = `dify_${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     
-    // 使用紧凑的 JSON 格式避免换行符问题
-    const manifestString = `{"schema_version":"v1","name_for_model":"${modelName}","name_for_human":"${cleanName}","description_for_model":"通过 Dify API 调用 ${cleanName}","description_for_human":"${app.description.replace(/[^\w\s\u4e00-\u9fff]/g, '')}","auth":{"type":"service_http","key":"Authorization","sub_type":"token/api_key","payload":"{\\"key\\":\\"Authorization\\",\\"service_token\\":\\"Bearer ${configForm.apiKey}\\",\\"location\\":\\"Header\\"}"},"logo_url":"official_plugin_icon/plugin_default.png","api":{"type":"openapi"},"common_params":{"header":[{"name":"User-Agent","value":"Coze/1.0"}]}}`;
+    // 使用 JSON.stringify 避免转义问题
+    const manifest = {
+      schema_version: "v1",
+      name_for_model: modelName,
+      name_for_human: cleanName,
+      description_for_model: `通过 Dify API 调用 ${cleanName}`,
+      description_for_human: app.description.replace(/[^\w\s\u4e00-\u9fff]/g, ''),
+      auth: {
+        type: "service_http",
+        key: "Authorization",
+        sub_type: "token/api_key",
+        payload: JSON.stringify({
+          key: "Authorization",
+          service_token: `Bearer ${configForm.apiKey}`,
+          location: "Header"
+        })
+      },
+      logo_url: "official_plugin_icon/plugin_default.png",
+      api: {
+        type: "openapi"
+      },
+      common_params: {
+        header: [
+          { name: "User-Agent", value: "Coze/1.0" }
+        ]
+      }
+    };
     
-    return manifestString;
+    return JSON.stringify(manifest);
   };
 
   // 从 Dify 错误信息中提取必填字段名
   const extractRequiredFieldsFromError = (msg?: string): string[] => {
     if (!msg) return [];
     const found = new Set<string>();
-    // e.g. "command_id is required in input form"
+    
+    // e.g. "Command_id is required in input form"
     const m1 = msg.match(/([A-Za-z0-9_\-]+)\s+is required/gi) || [];
     m1.forEach(s => {
       const k = s.split(' ')[0].replace(/[^A-Za-z0-9_\-]/g, '');
-      if (k) found.add(k);
+      if (k) found.add(k); // 保持原始大小写
     });
+    
     // e.g. Missing required parameter: command_id
     const m2 = msg.match(/Missing required (?:parameter|field)(?: in .*?)?:\s*([A-Za-z0-9_\-]+)/i);
     if (m2 && m2[1]) found.add(m2[1]);
+    
+    // e.g. "Command_id is required in input form" - 处理大写开头的情况
+    const m3 = msg.match(/([A-Z][A-Za-z0-9_\-]*)\s+is required/gi) || [];
+    m3.forEach(s => {
+      const k = s.split(' ')[0].replace(/[^A-Za-z0-9_\-]/g, '');
+      if (k) found.add(k); // 保持原始大小写
+    });
+    
+    console.log(`🔍 从错误信息提取字段: "${msg}" -> [${Array.from(found).join(', ')}]`);
     return Array.from(found);
   };
 
   // 探测 Dify 接口返回，推断必填 inputs 字段
   const probeRequiredInputKeys = async (app: DifyApp): Promise<string[]> => {
     const isChat = app.type === 'chat';
+    const host = configForm.difyHost.replace(/\/$/, '');
+    
+    // 对于工作流，需要使用正确的路径格式
     const url = isChat
-      ? `${configForm.difyHost}/v1/chat-messages`
-      : `${configForm.difyHost}/v1/workflows/${app.id}/run`;
+      ? `${host}/v1/chat-messages`
+      : `${host}/v1/workflows/run`;  // 注意：这里用于探测，实际调用时需要工作流ID
+    
+    console.log(`🔍 探测接口: ${url}`);
+    console.log(`🔍 应用类型: ${app.type}, ID: ${app.id}`);
+    
     try {
+      const requestBody = isChat
+        ? { query: 'hello', inputs: {}, user: 'user', response_mode: 'blocking' }
+        : { inputs: {}, user: 'user', response_mode: 'blocking' };
+        
+      console.log(`🔍 请求体:`, requestBody);
+      
       const resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${configForm.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(
-          isChat
-            ? { query: 'hello', inputs: {}, user: 'user', response_mode: 'blocking', stream: false }
-            : { inputs: {}, user: 'user', response_mode: 'blocking', stream: false }
-        ),
+        body: JSON.stringify(requestBody),
       });
+      
+      console.log(`🔍 响应状态: ${resp.status}`);
+      
       if (resp.ok) return [];
       const data = await resp.json().catch(() => ({} as any));
+      console.log(`🔍 错误响应:`, data);
+      
       const msg = data?.message || data?.msg || '';
       const fields = extractRequiredFieldsFromError(msg);
+      console.log(`🔍 提取的必填字段:`, fields);
       return fields;
-    } catch {
+    } catch (err) {
+      console.warn('参数探测失败:', err);
       return [];
     }
   };
@@ -424,7 +540,10 @@ const DifyManagementPage = () => {
   // 生成 OpenAPI 文档（可注入必填 inputs 字段）
   const generateOpenAPIDoc = (app: DifyApp, requiredInputKeys: string[] = []) => {
     const isChat = app.type === 'chat';
-    const apiPath = isChat ? '/v1/chat-messages' : `/v1/workflows/${app.id}/run`;
+    const host = configForm.difyHost.replace(/\/$/, '');
+    
+    // 修正工作流 API 路径 - 使用实际可用的端点
+    const apiPath = isChat ? '/v1/chat-messages' : '/v1/workflows/run';
     const operationId = isChat ? 'dify_chat_messages' : 'dify_workflow_run';
     
     // 清理标题和描述中的特殊字符
@@ -452,7 +571,8 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' }
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'blocking', description: '响应模式：blocking（阻塞）或 streaming（流式）', enum: ['blocking', 'streaming'] }
           },
           required: ['query', 'inputs']
         }
@@ -467,7 +587,8 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' }
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'blocking', description: '响应模式：blocking（阻塞）或 streaming（流式）', enum: ['blocking', 'streaming'] }
           },
           required: ['inputs']
         };
@@ -475,12 +596,13 @@ const DifyManagementPage = () => {
     const openapi = {
       openapi: '3.0.3',
       info: { title: cleanTitle, description: cleanDescription, version: '1.0.0' },
-      servers: [{ url: configForm.difyHost }],
+      servers: [{ url: host }],
       paths: {
         [apiPath]: {
           post: {
             operationId,
             summary: `调用 ${cleanTitle}`,
+            // 工作流使用 /v1/workflows/run 端点，不需要路径参数
             requestBody: {
               required: true,
               content: {

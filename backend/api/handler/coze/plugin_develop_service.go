@@ -1159,6 +1159,93 @@ func RegisterDifyPlugin(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, resp)
 }
 
+// FetchDifyWorkflows
+// @router /api/plugin_api/fetch_dify_workflows [POST]
+// 入参: { host: string, api_key: string }
+// 说明: 兼容不同 Dify 部署版本，尽量探测工作流列表；若不可用则返回空列表但保持 200。
+func FetchDifyWorkflows(ctx context.Context, c *app.RequestContext) {
+    var req struct {
+        Host   string `json:"host"`
+        ApiKey string `json:"api_key"`
+    }
+    if err := c.BindJSON(&req); err != nil {
+        invalidParamRequestResponse(c, "invalid request body")
+        return
+    }
+    if req.Host == "" || req.ApiKey == "" {
+        invalidParamRequestResponse(c, "host and api_key are required")
+        return
+    }
+
+    type wf struct {
+        ID   string `json:"id"`
+        Name string `json:"name"`
+    }
+    result := struct {
+        Workflows []wf `json:"workflows"`
+    }{Workflows: []wf{}}
+
+    // 逐个探测可能存在的工作流列表接口（不同版本差异较大）
+    endpoints := []string{
+        "/v1/workflows",           // 若存在
+        "/workflows",              // 旧路径
+        "/api/workflows",          // 其它路径
+    }
+
+    client := &http.Client{Timeout: 15 * time.Second}
+    for _, ep := range endpoints {
+        url := strings.TrimRight(req.Host, "/") + ep
+        httpReq, _ := http.NewRequest("GET", url, nil)
+        httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", req.ApiKey))
+        httpReq.Header.Set("Content-Type", "application/json")
+        resp, err := client.Do(httpReq)
+        if err != nil {
+            continue
+        }
+        body, _ := io.ReadAll(resp.Body)
+        resp.Body.Close()
+        if resp.StatusCode != 200 {
+            continue
+        }
+        // 尝试解析常见结构
+        var anyData map[string]any
+        if json.Unmarshal(body, &anyData) == nil {
+            // 情况1: { data: [ {id,name}, ... ] }
+            if arr, ok := anyData["data"].([]any); ok {
+                for _, it := range arr {
+                    if m, ok := it.(map[string]any); ok {
+                        id := fmt.Sprint(m["id"])
+                        name := fmt.Sprint(m["name"])
+                        if id != "" {
+                            result.Workflows = append(result.Workflows, wf{ID: id, Name: name})
+                        }
+                    }
+                }
+                break
+            }
+            // 情况2: 直接数组
+            if arr, ok := anyData["workflows"].([]any); ok {
+                for _, it := range arr {
+                    if m, ok := it.(map[string]any); ok {
+                        id := fmt.Sprint(m["id"])
+                        name := fmt.Sprint(m["name"])
+                        if id != "" {
+                            result.Workflows = append(result.Workflows, wf{ID: id, Name: name})
+                        }
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    c.JSON(consts.StatusOK, map[string]any{
+        "code": 0,
+        "msg":  "",
+        "data": result,
+    })
+}
+
 func generateRequestSchema(appType string) map[string]interface{} {
 	if appType == "chat" {
 		return map[string]interface{}{

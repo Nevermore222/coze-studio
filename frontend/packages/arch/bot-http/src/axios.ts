@@ -36,7 +36,10 @@ export enum ErrorCodes {
   COZE_TOKEN_INSUFFICIENT_WORKFLOW = 702095072,
 }
 
-export const axiosInstance = axios.create();
+export const axiosInstance = axios.create({
+  // Set timeout to 5 minutes for long-running operations like Dify workflows
+  timeout: 300000, // 300 seconds
+});
 
 const HTTP_STATUS_COE_UNAUTHORIZED = 401;
 

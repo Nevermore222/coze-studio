@@ -46,6 +46,7 @@ func registerDifyRoutes(r *server.Hertz) {
 	{
 		api.POST("/scan_dify_apps", cozehandler.ScanDifyApps)
 		api.POST("/register_dify_plugin", cozehandler.RegisterDifyPlugin)
+        api.POST("/fetch_dify_workflows", cozehandler.FetchDifyWorkflows)
 	}
 }
 

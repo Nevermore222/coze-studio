@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
@@ -38,13 +39,17 @@ type Components struct {
 }
 
 func NewService(components *Components) PluginService {
+	// 创建带超时配置的 HTTP 客户端
+	httpClient := resty.New()
+	httpClient.SetTimeout(300 * time.Second) // 设置 5 分钟超时，适应 Dify 工作流的长时间执行
+	
 	impl := &pluginServiceImpl{
 		db:         components.DB,
 		oss:        components.OSS,
 		pluginRepo: components.PluginRepo,
 		toolRepo:   components.ToolRepo,
 		oauthRepo:  components.OAuthRepo,
-		httpCli:    resty.New(),
+		httpCli:    httpClient,
 	}
 
 	initOnce.Do(func() {
