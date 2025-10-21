@@ -3,54 +3,54 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# if you located in China, you can use aliyun mirror to speed up
+# Use aliyun mirror for Alpine packages
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
-# Install bash git dos2unix for TypeScript compiler
+# Install system dependencies
 RUN apk add --no-cache bash git dos2unix
 
-# if you located in China, you can use aliyun mirror to speed up
-#RUN npm config set registry https://npm.aliyun.com 
-RUN npm config set registry https://registry.npmmirror.com 
+# Use official npm registry to avoid missing Rush dependencies
+RUN npm config set registry https://registry.npmjs.org
 
-
-# Copy rush.json from root directory first
+# Copy rush.json first
 COPY rush.json ./
 
-# Install rush with retry logic
-RUN npm install -g @microsoft/rush
+# Install Rush CLI from official registry
+RUN npm install -g @microsoft/rush --registry=https://registry.npmjs.org
 
-# Copy the frontend source code (excluding node_modules and build artifacts)
+# Copy source code
 COPY frontend/ ./frontend/
-
-# Copy common directory for Rush
 COPY common/ ./common/
-
-# Copy scripts directory for Rush hooks
 COPY scripts/ ./scripts/
 
-# Convert line endings for shell scripts in scripts directory to Unix format
+# Fix line endings
 RUN find . -name "*.sh" -type f -exec dos2unix {} \;
 
-# Install all dependencies
-RUN chmod +x scripts/hooks/post-rush-install.sh && rm -rf /app/common/temp && rush install
+# Make hook executable and clean temp
+RUN chmod +x scripts/hooks/post-rush-install.sh && rm -rf /app/common/temp
 
-# Use rush build to build the specific project
+# Install dependencies
+RUN rush install
+
+# Build the app (NO --no-install — it's invalid!)
 RUN rush build --to @coze-studio/app
 
-# Production image stage
+# Debug: Find all output directories
+RUN echo "=== Searching for build output directories ===" && \
+    find /app/frontend/apps/coze-studio -type d \( -name "dist" -o -name "output" -o -name "build" \) && \
+    echo "=== Listing coze-studio app directory ===" && \
+    ls -la /app/frontend/apps/coze-studio/ && \
+    echo "=== End debug ==="
+
+
+# Production stage
 FROM nginx:1.25-alpine
 
-
-# if you located in China, you can use aliyun mirror to speed up
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
-# Install necessary tools for SSL configuration
 RUN apk add --no-cache bash
 
-# Copy build artifacts to nginx static directory
+# Copy built assets from frontend app directory
 COPY --from=builder /app/frontend/apps/coze-studio/dist /usr/share/nginx/html
 
 EXPOSE 8888
-
-# Start nginx
 CMD ["nginx", "-g", "daemon off;"]
