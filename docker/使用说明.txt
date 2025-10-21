@@ -1,0 +1,91 @@
+Coze Studio 离线部署指南
+====================================
+
+由于服务器网络不畅，需要通过离线方式部署 Coze Studio。
+
+步骤1: 在 Windows 电脑上下载镜像
+------------------------------------
+1. 确保 Windows 电脑已安装 Docker Desktop
+2. 将以下文件复制到 Windows 电脑：
+   - export_images.bat
+   
+3. 在 Windows 电脑上双击运行 export_images.bat
+   - 脚本会自动下载所需的 9 个 Docker 镜像
+   - 下载完成后会导出为 .tar 文件到 coze_images 目录
+   - 总大小约 10-15 GB，下载时间取决于网络速度
+
+步骤2: 上传镜像到 Linux 服务器
+------------------------------------
+1. 将生成的 coze_images 目录压缩（可选，加快传输）
+   
+2. 使用以下任一方式上传到服务器：
+   
+   方式A - 使用 scp:
+   scp -r coze_images softroad@服务器IP:/usr/local/ai/coze-studio/docker/
+   
+   方式B - 使用 U盘/移动硬盘:
+   将 coze_images 目录复制到 U盘
+   在服务器上挂载 U盘并复制到 /usr/local/ai/coze-studio/docker/
+   
+   方式C - 使用 WinSCP/FileZilla:
+   使用图形化工具上传 coze_images 目录
+
+步骤3: 在 Linux 服务器上导入镜像
+------------------------------------
+1. SSH 登录到服务器
+   
+2. 进入目录:
+   cd /usr/local/ai/coze-studio/docker
+   
+3. 导入镜像:
+   sudo ./import_images.sh
+   
+4. 等待导入完成（约 5-10 分钟）
+
+步骤4: 启动 Coze Studio
+------------------------------------
+1. 运行部署脚本:
+   sudo ./offline_deploy.sh
+   
+2. 等待所有服务启动（约 2-5 分钟）
+   
+3. 访问 Coze Studio:
+   http://localhost:8888
+
+常用命令
+------------------------------------
+查看服务状态:
+  sudo docker-compose ps
+
+查看服务日志:
+  sudo docker-compose logs -f
+
+停止服务:
+  sudo docker-compose down
+
+重启服务:
+  sudo docker-compose restart
+
+故障排查
+------------------------------------
+如果服务启动失败:
+1. 查看日志: sudo docker-compose logs
+2. 检查端口占用: sudo netstat -tulpn | grep 8888
+3. 检查磁盘空间: df -h
+4. 重新启动: sudo docker-compose down && sudo docker-compose up -d
+
+所需镜像列表
+------------------------------------
+1. mysql:8.4.5
+2. bitnami/redis:8.0
+3. bitnami/elasticsearch:8.18.0
+4. minio/minio:RELEASE.2025-06-13T11-33-47Z-cpuv1
+5. bitnami/etcd:3.5
+6. milvusdb/milvus:v2.5.10
+7. nsqio/nsq:v1.2.1
+8. cozedev/coze-studio-server:latest
+9. cozedev/coze-studio-web:latest
+
+====================================
+如有问题，请查看日志文件或联系技术支持。
+
