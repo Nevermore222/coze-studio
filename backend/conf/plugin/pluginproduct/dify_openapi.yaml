@@ -3,7 +3,7 @@ info:
   title: Dify Bridge
   version: "1.0.0"
 servers:
-  - url: http://192.168.9.177
+  - url: http://192.168.8.247
 paths:
   /v1/chat-messages:
     post:
