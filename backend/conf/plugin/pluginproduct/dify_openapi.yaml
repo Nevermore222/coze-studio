@@ -49,6 +49,49 @@ paths:
                   metadata:
                     type: object
                     additionalProperties: true
+  /v1/completion-messages:
+    post:
+      operationId: dify_completion_messages
+      summary: Invoke Dify Agent/Completion App
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  additionalProperties: true
+                  description: "Agent输入参数(JSON对象)"
+                  example:
+                    inputStr: "example input"
+                user:
+                  type: string
+                  default: "user"
+                response_mode:
+                  type: string
+                  enum: [blocking]
+                  default: blocking
+                stream:
+                  type: boolean
+                  default: false
+              required: [inputs]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  answer:
+                    type: string
+                  metadata:
+                    type: object
+                    additionalProperties: true
   /v1/workflows/{workflow_id}/run:
     post:
       operationId: dify_workflow_run

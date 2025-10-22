@@ -39,8 +39,9 @@ interface DifyApp {
   id: string;
   name: string;
   description: string;
-  type: 'chat' | 'completion' | 'workflow';
+  type: 'chat' | 'completion' | 'workflow' | 'agent' | 'agent-chat';
   icon?: string;
+  api_endpoint?: string;
 }
 
 interface DifyConfigFormState {
@@ -65,7 +66,7 @@ const DifyManagementPage = () => {
   const [configs, setConfigs] = useState<DifyConfig[]>([]);
   const [currentConfig, setCurrentConfig] = useState<DifyConfig | null>(null);
   const [configForm, setConfigForm] = useState<DifyConfigFormState>({
-    difyHost: 'http://192.168.9.177',
+    difyHost: 'http://192.168.8.247',
     apiKey: '',
   });
   const [apps, setApps] = useState<DifyApp[]>([]);
@@ -327,39 +328,109 @@ const DifyManagementPage = () => {
       const normalizedHost = configForm.difyHost.replace(/\/$/, '');
       const scannedApps: DifyApp[] = [];
 
-      // 1. 先探测应用类型：通过 chat-messages 接口判断
-      let isWorkflowApp = false;
+      // 1. 首先从 Dify info API 获取实际的 mode（最准确）
+      let actualMode = 'unknown';
       try {
-        const probeResp = await fetch(`${normalizedHost}/v1/chat-messages`, {
-          method: 'POST',
+        const infoResp = await fetch(`${normalizedHost}/v1/info`, {
+          method: 'GET',
           headers: {
             'Authorization': `Bearer ${configForm.apiKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            query: 'test',
-            inputs: {},
-            user: 'probe',
-            response_mode: 'blocking'
-          })
         });
-        
-        if (!probeResp.ok) {
-          const errorData = await probeResp.json().catch(() => ({}));
-          // 如果返回 not_chat_app，说明这是工作流应用
-          if (errorData?.code === 'not_chat_app' || 
-              String(errorData?.message || '').includes('not_chat_app') ||
-              String(errorData?.message || '').includes('workflow')) {
-            isWorkflowApp = true;
-            console.log('🔍 检测到工作流应用');
-          }
+        if (infoResp.ok) {
+          const infoData = await infoResp.json();
+          actualMode = infoData.mode || 'unknown';
+          console.log('🔍 Dify 应用模式 (从 /v1/info):', actualMode);
         }
       } catch (err) {
-        console.warn('应用类型探测失败:', err);
+        console.warn('无法获取应用模式:', err);
       }
 
-      // 2. 根据探测结果添加应用
-      if (isWorkflowApp) {
+      // 2. 根据 mode 直接判断类型，如果 mode 为 unknown 则进行探测
+      let appType: 'chat' | 'workflow' | 'agent' | 'agent-chat' = 'chat';
+      
+      if (actualMode === 'chat') {
+        appType = 'chat';
+        console.log('✓ 识别为 Chat 应用');
+      } else if (actualMode === 'workflow') {
+        appType = 'workflow';
+        console.log('✓ 识别为 Workflow 应用');
+      } else if (actualMode === 'completion' || actualMode === 'agent') {
+        appType = 'agent';
+        console.log('✓ 识别为 Agent/Completion 应用');
+      } else if (actualMode === 'agent-chat') {
+        appType = 'agent-chat';
+        console.log('✓ 识别为 Agent Chat 应用');
+      } else {
+        // mode 为 unknown，需要探测
+        console.log('⚠ mode 未知，开始探测应用类型...');
+        
+        // 根据 API Key 前缀初步判断
+        if (configForm.apiKey.startsWith('workflow-')) {
+          appType = 'workflow';
+          console.log('✓ 根据 API Key 前缀识别为 Workflow');
+        } else if (configForm.apiKey.startsWith('app-')) {
+          // app- 开头可能是 chat 或 agent，需要进一步探测
+          try {
+            const probeResp = await fetch(`${normalizedHost}/v1/chat-messages`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${configForm.apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: 'test',
+                inputs: {},
+                user: 'probe',
+                response_mode: 'blocking'
+              })
+            });
+            
+            if (probeResp.ok || probeResp.status === 200) {
+              appType = 'chat';
+              console.log('✓ 探测确认为 Chat 应用');
+            } else {
+              const errorData = await probeResp.json().catch(() => ({}));
+              const errorMsg = String(errorData?.message || '').toLowerCase();
+              
+              if (errorMsg.includes('agent') && errorMsg.includes('streaming')) {
+                appType = 'agent-chat';
+                console.log('✓ 探测确认为 Agent Chat 应用');
+              } else if (errorMsg.includes('completion') || errorMsg.includes('agent')) {
+                appType = 'agent';
+                console.log('✓ 探测确认为 Agent 应用');
+              } else {
+                // 默认为 chat
+                appType = 'chat';
+                console.log('✓ 默认识别为 Chat 应用');
+              }
+            }
+          } catch (err) {
+            console.warn('探测失败，默认为 Chat:', err);
+            appType = 'chat';
+          }
+        }
+      }
+
+      // 3. 根据识别出的类型添加应用
+      if (appType === 'agent-chat') {
+        // Agent Chat 类型 - 使用 chat-messages 端点但需要 streaming
+        scannedApps.push({
+          id: configForm.apiKey,
+          name: realAppName || 'Dify Agent Chat应用',
+          description: `从 ${normalizedHost} 导入的Agent Chat应用`,
+          type: 'agent-chat',
+        });
+      } else if (appType === 'agent') {
+        // Agent/Completion 类型
+        scannedApps.push({
+          id: configForm.apiKey,
+          name: realAppName || 'Dify Agent应用',
+          description: `从 ${normalizedHost} 导入的Agent应用`,
+          type: 'agent',
+        });
+      } else if (appType === 'workflow') {
         // 这是工作流应用，尝试获取工作流列表
         try {
           const wfResp = await fetch('/api/plugin_api/fetch_dify_workflows', {
@@ -495,10 +566,16 @@ const DifyManagementPage = () => {
   // 探测 Dify 接口返回，推断必填 inputs 字段
   const probeRequiredInputKeys = async (app: DifyApp): Promise<string[]> => {
     const isChat = app.type === 'chat';
+    const isAgent = app.type === 'agent';
+    const isAgentChat = app.type === 'agent-chat';
     const host = configForm.difyHost.replace(/\/$/, '');
     
-    // 对于工作流，需要使用正确的路径格式
+    // 根据应用类型使用不同的路径
     const url = isChat
+      ? `${host}/v1/chat-messages`
+      : isAgent
+      ? `${host}/v1/completion-messages`
+      : isAgentChat
       ? `${host}/v1/chat-messages`
       : `${host}/v1/workflows/run`;  // 注意：这里用于探测，实际调用时需要工作流ID
     
@@ -506,9 +583,12 @@ const DifyManagementPage = () => {
     console.log(`🔍 应用类型: ${app.type}, ID: ${app.id}`);
     
     try {
+      // agent-chat 需要 query + inputs + streaming
       const requestBody = isChat
-        ? { query: 'hello', inputs: {}, user: 'user' }
-        : { inputs: {}, user: 'user' };
+        ? { query: 'hello', inputs: {}, user: 'user', response_mode: 'blocking' }
+        : isAgentChat
+        ? { query: 'test', inputs: {}, user: 'user', response_mode: 'streaming' }
+        : { inputs: {}, user: 'user', response_mode: 'blocking' };
         
       console.log(`🔍 请求体:`, requestBody);
       
@@ -540,29 +620,43 @@ const DifyManagementPage = () => {
   // 生成 OpenAPI 文档（可注入必填 inputs 字段）
   const generateOpenAPIDoc = (app: DifyApp, requiredInputKeys: string[] = []) => {
     const isChat = app.type === 'chat';
+    const isAgent = app.type === 'agent';
+    const isAgentChat = app.type === 'agent-chat';
     const host = configForm.difyHost.replace(/\/$/, '');
     
-    // 修正工作流 API 路径 - 使用实际可用的端点
-    const apiPath = isChat ? '/v1/chat-messages' : '/v1/workflows/run';
-    const operationId = isChat ? 'dify_chat_messages' : 'dify_workflow_run';
+    // 根据应用类型使用不同的API路径
+    const apiPath = isChat 
+      ? '/v1/chat-messages' 
+      : isAgent 
+      ? '/v1/completion-messages' 
+      : isAgentChat
+      ? '/v1/chat-messages'
+      : '/v1/workflows/run';
+    
+    const operationId = isChat 
+      ? 'dify_chat_messages' 
+      : isAgent 
+      ? 'dify_completion_messages' 
+      : isAgentChat
+      ? 'dify_agent_chat_messages'
+      : 'dify_workflow_run';
     
     // 清理标题和描述中的特殊字符
     const cleanTitle = app.name.replace(/[^a-zA-Z0-9\s]/g, '').trim();
     const cleanDescription = app.description.replace(/[^\w\s\u4e00-\u9fff]/g, '');
     
-    // chat 需要 query 和 inputs；workflow 需要 inputs
     // 动态注入探测出的必填 inputs 字段（全部 string，方便先跑通）
     const dynamicInputProps: Record<string, any> = {};
     requiredInputKeys.forEach(k => {
       if (k && !dynamicInputProps[k]) dynamicInputProps[k] = { type: 'string', description: `必填：${k}` };
     });
 
+    // 根据应用类型构建不同的schema
     const schemaObj = isChat
       ? { 
           type: 'object',
           properties: {
             query: { type: 'string', description: '用户问题', example: '你好，给我一个示例' },
-            // 强制渲染 JSON 编辑器：default + example
             inputs: { 
               type: 'object', 
               description: '输入参数(JSON 对象)',
@@ -571,7 +665,49 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' }
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'blocking', enum: ['blocking'], description: '响应模式' }
+          },
+          required: ['query', 'inputs']
+        }
+      : isAgent
+      ? {
+          // Agent类型：只需要inputs，不需要query，使用streaming
+          type: 'object',
+          properties: {
+            inputs: { 
+              type: 'object', 
+              additionalProperties: true, 
+              default: {}, 
+              description: 'Agent输入参数(JSON对象)',
+              example: requiredInputKeys.length > 0 
+                ? Object.fromEntries(requiredInputKeys.map(k => [k, `示例${k}`]))
+                : { inputStr: '示例输入' },
+              properties: dynamicInputProps
+            },
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'streaming', enum: ['streaming'], description: 'Agent仅支持streaming模式' }
+          },
+          required: ['inputs']
+        }
+      : isAgentChat
+      ? {
+          // Agent Chat类型：需要query和inputs，使用streaming
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '用户问题', example: '请帮我分析' },
+            inputs: { 
+              type: 'object', 
+              additionalProperties: true, 
+              default: {}, 
+              description: 'Agent Chat输入参数(JSON对象)',
+              example: requiredInputKeys.length > 0 
+                ? Object.fromEntries(requiredInputKeys.map(k => [k, `示例${k}`]))
+                : { inputStr: '示例输入' },
+              properties: dynamicInputProps
+            },
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'streaming', enum: ['streaming'], description: 'Agent Chat仅支持streaming模式' }
           },
           required: ['query', 'inputs']
         }
@@ -586,7 +722,8 @@ const DifyManagementPage = () => {
               example: {},
               properties: dynamicInputProps
             },
-            user: { type: 'string', default: 'user', description: '用户标识' }
+            user: { type: 'string', default: 'user', description: '用户标识' },
+            response_mode: { type: 'string', default: 'blocking', enum: ['blocking'], description: '响应模式' }
           },
           required: ['inputs']
         };
@@ -600,7 +737,6 @@ const DifyManagementPage = () => {
           post: {
             operationId,
             summary: `调用 ${cleanTitle}`,
-            // 工作流使用 /v1/workflows/run 端点，不需要路径参数
             requestBody: {
               required: true,
               content: {
@@ -743,7 +879,12 @@ const DifyManagementPage = () => {
         const pluginId = registerData.data?.plugin_id || 'N/A';
         console.log(`✅ 成功注册 ${app.name} 到 Coze 插件库`);
         console.log(`📋 应用类型: ${app.type}`);
-        console.log(`🔗 API 端点: ${configForm.difyHost}${app.type === 'chat' ? '/v1/chat-messages' : `/v1/workflows/${app.id}/run`}`);
+        console.log(`🔗 API 端点: ${configForm.difyHost}${
+          app.type === 'chat' ? '/v1/chat-messages' : 
+          app.type === 'agent' ? '/v1/completion-messages' : 
+          app.type === 'agent-chat' ? '/v1/chat-messages (streaming)' :
+          `/v1/workflows/${app.id}/run`
+        }`);
         console.log(`🆔 插件ID: ${pluginId}`);
         
         // 保存插件ID
@@ -788,24 +929,32 @@ const DifyManagementPage = () => {
               // 自动尝试一次 DebugAPI 以通过“工具未调试”校验
               try {
                 // 1) 拉取插件API列表，找到第一个API作为调试对象
-                const apiListResp = await fetch('/api/plugin_api/get_plugin_apis', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ plugin_id: pluginId, page: 1, size: 10 })
-                });
-                if (apiListResp.ok) {
-                  const apiList = await apiListResp.json();
-                  const firstApi = apiList?.data?.apis?.[0] || apiList?.data?.list?.[0];
-                  if (firstApi?.api_id || firstApi?.id) {
-                    const apiId = firstApi.api_id || firstApi.id;
-                    // 2) 触发一次调试 - 根据应用类型构造正确的参数
-                    const debugParams = app.type === 'chat' 
-                      ? { query: 'hello', inputs: {}, user: 'test-user' }
-                      : { inputs: {}, user: 'test-user' };
-                    
-                    console.log(`🔧 自动调试参数 (${app.type}):`, debugParams);
-                    
-                    const debugResp = await fetch('/api/plugin_api/debug_api', {
+                  const apiListResp = await fetch('/api/plugin_api/get_plugin_apis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plugin_id: pluginId, page: 1, size: 10 })
+                  });
+                  if (apiListResp.ok) {
+                    const apiList = await apiListResp.json();
+                    const firstApi = apiList?.data?.apis?.[0] || apiList?.data?.list?.[0];
+                    if (firstApi?.api_id || firstApi?.id) {
+                      const apiId = firstApi.api_id || firstApi.id;
+                      // 2) 触发一次调试 - 根据应用类型构造正确的参数
+                      const debugParams = app.type === 'chat' 
+                        ? { query: 'hello', inputs: {}, user: 'test-user', response_mode: 'blocking' }
+                        : app.type === 'agent'
+                        ? { inputs: requiredKeys.length > 0 
+                            ? Object.fromEntries(requiredKeys.map(k => [k, 'test']))
+                            : { inputStr: 'test' }, user: 'test-user', response_mode: 'streaming' }
+                        : app.type === 'agent-chat'
+                        ? { query: 'test', inputs: requiredKeys.length > 0 
+                            ? Object.fromEntries(requiredKeys.map(k => [k, 'test']))
+                            : { inputStr: 'test' }, user: 'test-user', response_mode: 'streaming' }
+                        : { inputs: {}, user: 'test-user', response_mode: 'blocking' };
+                      
+                      console.log(`🔧 自动调试参数 (${app.type}):`, debugParams);
+                      
+                      const debugResp = await fetch('/api/plugin_api/debug_api', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -998,6 +1147,8 @@ const DifyManagementPage = () => {
       render: (type: string) => 
         type === 'chat' ? '聊天应用' : 
         type === 'workflow' ? '工作流' : 
+        type === 'agent' ? 'Agent应用' : 
+        type === 'agent-chat' ? 'Agent Chat应用' :
         type === 'completion' ? '完成应用' : type,
     },
   ];
@@ -1063,8 +1214,8 @@ const DifyManagementPage = () => {
       dataIndex: 'type',
       key: 'type',
       render: (type: string) => (
-        <Tag color={type === 'chat' ? 'blue' : type === 'workflow' ? 'green' : 'orange'}>
-          {type === 'chat' ? '聊天应用' : type === 'workflow' ? '工作流' : '完成应用'}
+        <Tag color={type === 'chat' ? 'blue' : type === 'workflow' ? 'green' : type === 'agent' || type === 'agent-chat' ? 'purple' : 'orange'}>
+          {type === 'chat' ? '聊天应用' : type === 'workflow' ? '工作流' : type === 'agent' ? 'Agent应用' : type === 'agent-chat' ? 'Agent Chat应用' : '完成应用'}
         </Tag>
       ),
     },
@@ -1237,8 +1388,8 @@ const DifyManagementPage = () => {
                     style={{ marginRight: 8 }}
                   />
                   <strong>{app.name}</strong>
-                  <Tag color={app.type === 'chat' ? 'blue' : 'green'} style={{ marginLeft: 8 }}>
-                    {app.type === 'chat' ? '聊天应用' : '工作流'}
+                  <Tag color={app.type === 'chat' ? 'blue' : app.type === 'workflow' ? 'green' : 'purple'} style={{ marginLeft: 8 }}>
+                    {app.type === 'chat' ? '聊天应用' : app.type === 'workflow' ? '工作流' : app.type === 'agent-chat' ? 'Agent Chat' : 'Agent应用'}
                   </Tag>
                 </div>
                 <div style={{ color: '#666', fontSize: 14 }}>

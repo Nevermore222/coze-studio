@@ -152,15 +152,23 @@ const LLMAndAPIContent: FC<{
                   <DiyMdBox
                     headingType={activeTab}
                     markDown={JSON.stringify(
-                      JSON.parse(response || '{}'),
+                      (() => {
+                        try {
+                          return JSON.parse(response || '{}');
+                        } catch {
+                          return { raw_streaming_response: response };
+                        }
+                      })(),
                       null,
                       INDENTATION_SPACES,
                     )}
-                    rawResponse={JSON.stringify(
-                      JSON.parse(rawResp || '{}'),
-                      null,
-                      INDENTATION_SPACES,
-                    )}
+                    rawResponse={(() => {
+                      try {
+                        return JSON.stringify(JSON.parse(rawResp || '{}'), null, INDENTATION_SPACES);
+                      } catch {
+                        return rawResp || '{}';
+                      }
+                    })()}
                     showRaw={showRaw}
                   />
                 )}

@@ -1010,12 +1010,38 @@ func ScanDifyApps(ctx context.Context, c *app.RequestContext) {
 	// 构造应用信息
 	apps := []map[string]interface{}{}
 
-	// 根据 API Key 类型判断应用类型
+	// 根据 info API 返回的mode字段判断应用类型（优先使用mode）
 	appType := "chat"
-	if strings.HasPrefix(req.ApiKey, "app-") {
-		appType = "chat"
-	} else if strings.HasPrefix(req.ApiKey, "workflow-") {
-		appType = "workflow"
+	appMode := ""
+	if mode, ok := infoData["mode"].(string); ok && mode != "" {
+		appMode = mode
+		// 直接根据 mode 判断类型，不进行额外探测
+		switch mode {
+		case "chat":
+			appType = "chat"
+		case "workflow":
+			appType = "workflow"
+		case "completion":
+			appType = "agent"  // completion 模式对应 agent 类型
+		case "agent":
+			appType = "agent"  // agent 模式对应 agent 类型
+		case "agent-chat":
+			appType = "agent-chat"  // agent-chat 模式需要 streaming
+		default:
+			// 未知模式，根据 API Key 前缀判断
+			if strings.HasPrefix(req.ApiKey, "app-") {
+				appType = "chat"
+			} else if strings.HasPrefix(req.ApiKey, "workflow-") {
+				appType = "workflow"
+			}
+		}
+	} else {
+		// 未返回mode，根据 API Key 前缀判断
+		if strings.HasPrefix(req.ApiKey, "app-") {
+			appType = "chat"
+		} else if strings.HasPrefix(req.ApiKey, "workflow-") {
+			appType = "workflow"
+		}
 	}
 
 	// 从 info API 获取应用基本信息
@@ -1024,18 +1050,29 @@ func ScanDifyApps(ctx context.Context, c *app.RequestContext) {
 		appName = name
 	}
 
+	// 根据应用类型生成正确的API端点
+	var apiEndpoint string
+	switch appType {
+	case "chat":
+		apiEndpoint = fmt.Sprintf("%s/v1/chat-messages", req.Host)
+	case "workflow":
+		apiEndpoint = fmt.Sprintf("%s/v1/workflows/run", req.Host)
+	case "agent":
+		apiEndpoint = fmt.Sprintf("%s/v1/completion-messages", req.Host)
+	case "agent-chat":
+		apiEndpoint = fmt.Sprintf("%s/v1/chat-messages", req.Host)
+	default:
+		apiEndpoint = fmt.Sprintf("%s/v1/chat-messages", req.Host)
+	}
+
 	app := map[string]interface{}{
-		"id":          req.ApiKey,
-		"name":        appName,
-		"description": fmt.Sprintf("从 %s 导入的 %s 应用", req.Host, appType),
-		"type":        appType,
-		"api_endpoint": fmt.Sprintf("%s/v1/%s", req.Host, 
-			map[string]string{
-				"chat": "chat-messages",
-				"workflow": fmt.Sprintf("workflows/%s/run", req.ApiKey),
-			}[appType]),
-		"host":    req.Host,
-		"api_key": req.ApiKey,
+		"id":           req.ApiKey,
+		"name":         appName,
+		"description":  fmt.Sprintf("从 %s 导入的 %s 应用 (mode: %s)", req.Host, appType, appMode),
+		"type":         appType,
+		"api_endpoint": apiEndpoint,
+		"host":         req.Host,
+		"api_key":      req.ApiKey,
 	}
 
 	apps = append(apps, app)
@@ -1095,12 +1132,23 @@ func RegisterDifyPlugin(ctx context.Context, c *app.RequestContext) {
 
 	// 生成 OpenAPI 规范
 	var apiPath, operationId string
-	if req.Type == "chat" {
+	switch req.Type {
+	case "chat":
 		apiPath = "/v1/chat-messages"
 		operationId = "dify_chat_messages"
-	} else {
+	case "workflow":
 		apiPath = fmt.Sprintf("/v1/workflows/%s/run", req.ApiKey)
 		operationId = "dify_workflow_run"
+	case "agent":
+		apiPath = "/v1/completion-messages"
+		operationId = "dify_completion_messages"
+	case "agent-chat":
+		apiPath = "/v1/chat-messages"
+		operationId = "dify_agent_chat_messages"
+	default:
+		// 默认使用chat
+		apiPath = "/v1/chat-messages"
+		operationId = "dify_chat_messages"
 	}
 
 	openapi := map[string]interface{}{
@@ -1275,14 +1323,10 @@ func generateRequestSchema(appType string) map[string]interface{} {
 					"enum": []string{"blocking"},
 					"default": "blocking",
 				},
-				"stream": map[string]interface{}{
-					"type": "boolean",
-					"default": false,
-				},
 			},
 			"required": []string{"query"},
 		}
-	} else {
+	} else if appType == "workflow" {
 		return map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -1301,9 +1345,60 @@ func generateRequestSchema(appType string) map[string]interface{} {
 					"enum": []string{"blocking"},
 					"default": "blocking",
 				},
-				"stream": map[string]interface{}{
-					"type": "boolean",
-					"default": false,
+			},
+			"required": []string{"inputs"},
+		}
+	} else if appType == "agent" || appType == "agent-chat" {
+		// Agent/Completion类型：需要inputs对象，使用streaming模式
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type": "string",
+					"description": "用户查询（agent-chat需要）",
+					"default": "",
+				},
+				"inputs": map[string]interface{}{
+					"type": "object",
+					"additionalProperties": true,
+					"description": "智能体输入参数(JSON对象，包含实际的输入字段)",
+					"example": map[string]interface{}{
+						"inputStr": "example input",
+					},
+				},
+				"user": map[string]interface{}{
+					"type": "string",
+					"default": "user",
+					"description": "用户标识",
+				},
+				"response_mode": map[string]interface{}{
+					"type": "string",
+					"enum": []string{"streaming"},
+					"default": "streaming",
+					"description": "Agent模式仅支持streaming",
+				},
+			},
+			"required": []string{"inputs"},
+		}
+	} else {
+		// 默认返回workflow格式
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"inputs": map[string]interface{}{
+					"type": "object",
+					"additionalProperties": true,
+					"description": "工作流输入参数",
+				},
+				"user": map[string]interface{}{
+					"type": "string",
+					"default": "user",
+					"description": "用户标识",
+				},
+				"response_mode": map[string]interface{}{
+					"type": "string",
+					"enum": []string{"blocking"},
+					"default": "blocking",
 				},
 			},
 			"required": []string{"inputs"},

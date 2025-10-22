@@ -1029,6 +1029,76 @@ var authCodeInvalidTokenErrMsg = map[i18n.Locale]string{
 	i18n.LocaleEN: "The '%s' plugin requires authorization. By authorizing, you agree to share data with the AI model you selected in Coze. Please [click here](%s) to authorize.",
 }
 
+// parseSSEResponse 解析Server-Sent Events (SSE)流式响应，提取最终答案
+// 用于处理Dify agent-chat模式返回的streaming数据
+func parseSSEResponse(sseData string) (string, error) {
+	var fullAnswer strings.Builder
+	var conversationID, messageID string
+	var metadata map[string]interface{}
+	
+	lines := strings.Split(sseData, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// 跳过空行和event: ping
+		if line == "" || line == "event: ping" {
+			continue
+		}
+		
+		// 处理 data: 开头的行
+		if strings.HasPrefix(line, "data:") {
+			jsonStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			
+			var event map[string]interface{}
+			if err := sonic.UnmarshalString(jsonStr, &event); err != nil {
+				continue // 跳过无法解析的行
+			}
+			
+			eventType, _ := event["event"].(string)
+			
+			switch eventType {
+			case "agent_message":
+				// 提取消息片段
+				if answer, ok := event["answer"].(string); ok {
+					fullAnswer.WriteString(answer)
+				}
+				// 提取conversation_id和message_id
+				if cid, ok := event["conversation_id"].(string); ok && conversationID == "" {
+					conversationID = cid
+				}
+				if mid, ok := event["message_id"].(string); ok && messageID == "" {
+					messageID = mid
+				}
+				
+			case "message_end":
+				// 提取metadata
+				if meta, ok := event["metadata"].(map[string]interface{}); ok {
+					metadata = meta
+				}
+			}
+		}
+	}
+	
+	// 构建最终响应JSON
+	result := map[string]interface{}{
+		"id":              messageID,
+		"conversation_id": conversationID,
+		"answer":          fullAnswer.String(),
+	}
+	
+	if metadata != nil {
+		result["metadata"] = metadata
+	}
+	
+	resultJSON, err := sonic.MarshalString(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal SSE result: %w", err)
+	}
+	
+	return resultJSON, nil
+}
+
 func (t *toolExecutor) processResponse(ctx context.Context, rawResp string) (trimmedResp string, err error) {
 	responses := t.tool.Operation.Responses
 	if len(responses) == 0 {
@@ -1042,6 +1112,18 @@ func (t *toolExecutor) processResponse(ctx context.Context, rawResp string) (tri
 	mType, ok := resp.Value.Content[model.MediaTypeJson] // only support application/json
 	if !ok {
 		return "", fmt.Errorf("the '%s' media type is not defined in response", model.MediaTypeJson)
+	}
+
+	// 检查是否为SSE streaming响应 (Dify agent-chat模式)
+	if strings.HasPrefix(rawResp, "data:") || strings.Contains(rawResp, "\ndata:") {
+		logs.CtxInfof(ctx, "[processResponse] Detected SSE streaming response, parsing...")
+		parsedResp, err := parseSSEResponse(rawResp)
+		if err != nil {
+			logs.CtxWarnf(ctx, "[processResponse] Failed to parse SSE response: %v, using raw response", err)
+			// 如果解析失败，返回原始响应的摘要
+			return fmt.Sprintf(`{"message":"SSE streaming response received","length":%d}`, len(rawResp)), nil
+		}
+		rawResp = parsedResp
 	}
 
 	decoder := sonic.ConfigDefault.NewDecoder(bytes.NewBufferString(rawResp))
